@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Profile{% endblock %}
+{% block content %}
+<h2>User Profile</h2>
+<!-- A01: Full sensitive record displayed — IDOR means anyone can reach this page -->
+<table class="table table-bordered">
+  <tr><th>ID</th><td>{{ user.id }}</td></tr>
+  <tr><th>Username</th><td>{{ user.username }}</td></tr>
+  <tr><th>Email</th><td>{{ user.email }}</td></tr>
+  <tr><th>Role</th><td>{{ user.role }}</td></tr>
+  <!-- A02: PII exposed in UI -->
+  <tr><th>SSN</th><td>{{ user.ssn }}</td></tr>
+  <tr><th>Credit Card</th><td>{{ user.credit_card }}</td></tr>
+  <tr><th>API Key</th><td>{{ user.api_key }}</td></tr>
+</table>
+{% endblock %}

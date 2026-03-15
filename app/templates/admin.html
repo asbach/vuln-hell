@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Admin{% endblock %}
+{% block content %}
+<h2>Admin Dashboard</h2>
+<div class="alert alert-warning">
+  A01: Access control relies solely on a weak JWT claim. The secret is <code>secret123</code>.
+</div>
+
+<ul class="nav nav-tabs mb-3" id="adminTabs">
+  <li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#tab-users">Users</a></li>
+  <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-products">Products</a></li>
+  <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-logs">Audit Logs</a></li>
+</ul>
+
+<div class="tab-content">
+  <!-- Users tab -->
+  <div class="tab-pane fade show active" id="tab-users">
+    <table class="table table-sm table-striped">
+      <thead><tr>
+        <th>ID</th><th>Username</th><th>Email</th><th>Role</th>
+        <!-- A02: PII columns -->
+        <th>SSN</th><th>Credit Card</th><th>API Key</th>
+      </tr></thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td>{{ u.id }}</td>
+          <td><a href="/api/users/{{ u.id }}/profile">{{ u.username }}</a></td>
+          <td>{{ u.email }}</td><td>{{ u.role }}</td>
+          <td>{{ u.ssn }}</td><td>{{ u.credit_card }}</td><td>{{ u.api_key }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Products tab -->
+  <div class="tab-pane fade" id="tab-products">
+    <table class="table table-sm table-striped">
+      <thead><tr><th>ID</th><th>Name</th><th>Description</th><th>Price</th><th>Owner</th></tr></thead>
+      <tbody>
+        {% for p in products %}
+        <tr>
+          <td>{{ p.id }}</td><td>{{ p.name }}</td>
+          <!-- A03: Stored XSS rendered unescaped in admin panel too -->
+          <td>{{ p.description | safe }}</td>
+          <td>{{ p.price }}</td><td>{{ p.owner_id }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Audit logs tab — A09: contains plaintext passwords -->
+  <div class="tab-pane fade" id="tab-logs">
+    <table class="table table-sm table-striped">
+      <thead><tr><th>ID</th><th>Action</th><th>User ID</th><th>Timestamp</th><th>Details</th></tr></thead>
+      <tbody>
+        {% for l in logs %}
+        <tr>
+          <td>{{ l.id }}</td><td>{{ l.action }}</td><td>{{ l.user_id }}</td>
+          <td>{{ l.timestamp }}</td>
+          <!-- A09: plaintext password visible in details column -->
+          <td>{{ l.details }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

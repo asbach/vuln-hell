@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Home{% endblock %}
+{% block content %}
+<div class="row">
+  <div class="col-md-8">
+    <h1>Welcome to VulnShop</h1>
+    <p class="text-muted">
+      This application is <strong>intentionally vulnerable</strong> for security tooling evaluation.
+    </p>
+    <div class="alert alert-danger">
+      <strong>WARNING:</strong> Do not deploy this in any real environment.
+    </div>
+    <h4>Quick links</h4>
+    <ul>
+      <li><a href="/products">Browse products (SQLi, XSS)</a></li>
+      <li><a href="/api/users">List all users — no auth (IDOR, A01)</a></li>
+      <li><a href="/admin">Admin panel (broken access control)</a></li>
+      <li><a href="/api/utils/env">Dump environment variables (A05)</a></li>
+    </ul>
+  </div>
+  <div class="col-md-4">
+    <div class="card border-danger">
+      <div class="card-header bg-danger text-white">OWASP Top 10 coverage</div>
+      <ul class="list-group list-group-flush small">
+        <li class="list-group-item">A01 – Broken Access Control (IDOR, missing auth)</li>
+        <li class="list-group-item">A02 – Cryptographic Failures (MD5, plaintext PII)</li>
+        <li class="list-group-item">A03 – Injection (SQLi, XSS, CMDi, SSTI)</li>
+        <li class="list-group-item">A04 – Insecure Design (mass assignment, no CSRF)</li>
+        <li class="list-group-item">A05 – Security Misconfiguration (debug, CORS *)</li>
+        <li class="list-group-item">A06 – Vulnerable Components (pinned CVEs)</li>
+        <li class="list-group-item">A07 – Auth Failures (alg:none, no lockout)</li>
+        <li class="list-group-item">A08 – Integrity Failures (pickle deserialization)</li>
+        <li class="list-group-item">A09 – Logging Failures (passwords in audit log)</li>
+        <li class="list-group-item">A10 – SSRF (/api/utils/fetch)</li>
+      </ul>
+    </div>
+  </div>
+</div>
+{% endblock %}

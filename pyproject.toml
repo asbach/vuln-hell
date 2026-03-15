@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vulnerable-fastapi-app"
+version = "0.1.0"
+description = "Intentionally vulnerable FastAPI app for SAST/DAST/pentest tooling evaluation"
+requires-python = ">=3.9,<3.13"
+dependencies = [
+    # A06: Intentionally pinned to vulnerable versions for SCA tooling evaluation
+    "fastapi==0.95.2",
+    "uvicorn==0.20.0",
+    "jinja2==3.1.2",            # CVE-2024-22195 — XSS via ngettext pluralisation
+    "python-multipart==0.0.5",  # CVE-2024-24762 — ReDoS / DoS on crafted form data
+    "pyjwt==2.3.0",             # CVE-2022-29217 — alg:none / algorithm confusion
+    "requests==2.27.1",         # CVE-2023-32681 — Proxy-Authorization header leak
+    "Pillow==9.3.0",            # CVE-2023-44271 / CVE-2023-50447 — uncontrolled resource consumption
+    "cryptography==38.0.4",     # CVE-2023-23931 — allows RSA signature bypass
+    "itsdangerous==2.0.1",
+    "passlib==1.7.4",
+    "aiofiles==0.7.0",
+    "python-dotenv==0.19.0",
+    "pyyaml>=5.1",              # B506 — yaml.load without safe Loader
+]
+
+
+[project.optional-dependencies]
+dev = [
+    "bandit[toml]>=1.7.0",   # Python SAST — run: uv run bandit -r app/
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+# ---------------------------------------------------------------------------
+# Bandit configuration
+# Intentionally broad — we WANT bandit to find everything in this test app.
+# Run: uv run bandit -r app/ -c pyproject.toml
+# ---------------------------------------------------------------------------
+[tool.bandit]
+exclude_dirs = [".venv", "tests"]
+skips = []          # no skips — surface all findings
+
+[tool.bandit.assert_used]
+skips = []

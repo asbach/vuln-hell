@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Products{% endblock %}
+{% block content %}
+<h2>Products</h2>
+<!-- A04: No CSRF token on search form -->
+<form method="get" action="/products" class="mb-4 d-flex gap-2">
+  <input type="text" name="search" class="form-control" placeholder="Search products..." value="{{ search }}">
+  <button type="submit" class="btn btn-primary">Search</button>
+</form>
+
+<!-- A03: Reflected XSS — search term echoed back via |safe, bypassing Jinja2 auto-escaping -->
+{% if search %}
+<div class="alert alert-info">
+  Results for: <strong>{{ search | safe }}</strong>
+</div>
+{% endif %}
+
+<div class="row">
+  {% for p in products %}
+  <div class="col-md-4 mb-3">
+    <div class="card">
+      <div class="card-body">
+        <h5 class="card-title">{{ p.name }}</h5>
+        <!-- A03: Stored XSS — description rendered without escaping -->
+        <p class="card-text">{{ p.description | safe }}</p>
+        <p class="text-muted">${{ p.price }}</p>
+        <span class="badge bg-secondary">{{ p.category }}</span>
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <p>No products found.</p>
+  {% endfor %}
+</div>
+
+<hr>
+<h4>Add Product</h4>
+<!-- A04: No CSRF token -->
+<form method="post" action="/api/products" enctype="multipart/form-data" class="row g-3">
+  <div class="col-md-4">
+    <input type="text" name="name" class="form-control" placeholder="Product name" required>
+  </div>
+  <div class="col-md-4">
+    <!-- A03: Accepts <script> tags in description — stored XSS -->
+    <input type="text" name="description" class="form-control" placeholder="Description (HTML allowed)">
+  </div>
+  <div class="col-md-2">
+    <input type="number" name="price" step="0.01" class="form-control" placeholder="Price" required>
+  </div>
+  <div class="col-md-2">
+    <button type="submit" class="btn btn-success w-100">Add</button>
+  </div>
+</form>
+{% endblock %}
