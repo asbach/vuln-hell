@@ -490,11 +490,14 @@ wheels = [
 
 [[package]]
 name = "pyjwt"
-version = "2.3.0"
+version = "2.12.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/1d/8e/01bdcfdbb352daaba8ea406d9df149c5bba7dbf70f908d4fa4c269fe6a08/PyJWT-2.3.0.tar.gz", hash = "sha256:b888b4d56f06f6dcd777210c334e69c737be74755d3e5e9ee3fe67dc18a0ee41", size = 62279, upload-time = "2021-10-16T15:54:56.057Z" }
+dependencies = [
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c2/27/a3b6e5bf6ff856d2509292e95c8f57f0df7017cf5394921fc4e4ef40308a/pyjwt-2.12.1.tar.gz", hash = "sha256:c74a7a2adf861c04d002db713dd85f84beb242228e671280bf709d765b03672b", size = 102564, upload-time = "2026-03-13T19:27:37.25Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2a/4d/67cc66a0c49003dc216fc73db2d05a3b80c7193167fd113da1f2c678ac2a/PyJWT-2.3.0-py3-none-any.whl", hash = "sha256:e0c4bb8d9f0af0c7f5b1ec4c5036309617d03d56932877f2f7a0beeb5318322f", size = 16907, upload-time = "2021-10-16T15:54:52.964Z" },
+    { url = "https://files.pythonhosted.org/packages/e5/7a/8dd906bd22e79e47397a61742927f6747fe93242ef86645ee9092e610244/pyjwt-2.12.1-py3-none-any.whl", hash = "sha256:28ca37c070cad8ba8cd9790cd940535d40274d22f80ab87f3ac6a713e6e8454c", size = 29726, upload-time = "2026-03-13T19:27:35.677Z" },
 ]
 
 [[package]]
@@ -730,7 +733,7 @@ requires-dist = [
     { name = "jinja2", specifier = "==3.1.2" },
     { name = "passlib", specifier = "==1.7.4" },
     { name = "pillow", specifier = "==9.3.0" },
-    { name = "pyjwt", specifier = "==2.3.0" },
+    { name = "pyjwt", specifier = "==2.12.1" },
     { name = "python-dotenv", specifier = "==0.19.0" },
     { name = "python-multipart", specifier = "==0.0.5" },
     { name = "pyyaml", specifier = ">=5.1" },
