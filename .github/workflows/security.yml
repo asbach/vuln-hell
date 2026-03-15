@@ -1,0 +1,690 @@
+###############################################################################
+# security.yml — Static analysis, SCA, container scanning, SBOM, secrets
+#
+# This is the primary security gate. Because this application is intentionally
+# vulnerable, ALL security scan jobs use:
+#   continue-on-error: true   — findings are expected and must not block PRs
+#   SARIF upload              — findings appear in the GitHub Security tab
+#   artifact upload           — raw results are downloadable for tool comparison
+#
+# Job graph (all run in parallel after checkout):
+#
+#   bandit     ─┐
+#   semgrep    ─┤
+#   pip-audit  ─┤─→  security-summary
+#   hadolint   ─┤
+#   trivy      ─┤
+#   checkov    ─┤
+#   gitleaks   ─┤
+#   syft       ─┘
+#
+# Triggers: push to main, any PR to main, weekly schedule, manual dispatch.
+###############################################################################
+
+name: Security Scanning
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  schedule:
+    # Full weekly scan every Sunday at 02:00 UTC
+    - cron: "0 2 * * 0"
+  workflow_dispatch:
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+# Default: read-only. Individual jobs elevate only what they need.
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # bandit — Python SAST using the config in pyproject.toml
+  # Expects HIGH severity findings (B301, B302, B307, B501, B502, B506, etc.)
+  # ---------------------------------------------------------------------------
+  bandit:
+    name: SAST — Bandit
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    continue-on-error: true
+
+    permissions:
+      contents: read
+      security-events: write  # needed for SARIF upload
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python from .python-version
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version-file: ".python-version"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@f0ec1fc3b38f5e7cd731bb6ce540c5af426746bb # v6.1.0
+
+      - name: Cache uv dependency store
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
+          restore-keys: uv-${{ runner.os }}-
+
+      - name: Install dependencies (includes bandit[toml])
+        run: uv sync --extra dev
+
+      - name: Run Bandit — full scan (SARIF output)
+        run: |
+          uv run bandit \
+            -r app/ \
+            -c pyproject.toml \
+            -f sarif \
+            -o bandit-results.sarif \
+            --exit-zero
+        # --exit-zero: always exit 0 so the step doesn't fail; the SARIF
+        # upload and artifact preserve findings for review.
+
+      - name: Run Bandit — high severity summary (human-readable)
+        run: |
+          echo "=== Bandit HIGH severity findings ===" > bandit-high.txt
+          uv run bandit \
+            -r app/ \
+            -c pyproject.toml \
+            --severity-level high \
+            --exit-zero \
+            2>&1 | tee -a bandit-high.txt
+
+      - name: Upload Bandit SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@ff0a06e83cb2de871e5a09832bc6a81e7276941f # v3.28.18
+        with:
+          sarif_file: bandit-results.sarif
+          category: bandit
+
+      - name: Upload Bandit results artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: bandit-results
+          path: |
+            bandit-results.sarif
+            bandit-high.txt
+          retention-days: 30
+
+      - name: Write Bandit summary
+        run: |
+          echo "## Bandit SAST Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Note:** This application is intentionally vulnerable." >> "$GITHUB_STEP_SUMMARY"
+          echo "All findings below are expected and are used to evaluate Bandit's detection capability." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### High-Severity Findings" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat bandit-high.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # semgrep — Python/FastAPI SAST with community and OWASP rulesets
+  # Uses the config at .github/semgrep.yml (checked in alongside this file).
+  # ---------------------------------------------------------------------------
+  semgrep:
+    name: SAST — Semgrep
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    continue-on-error: true
+
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Run Semgrep (SARIF output)
+        uses: returntocorp/semgrep-action@fcd5ab7459e8d91cb1777481980d1b18b4fc6735 # v1
+        with:
+          config: .github/semgrep.yml
+          generateSarif: "1"
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+
+      - name: Upload Semgrep SARIF to GitHub Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@ff0a06e83cb2de871e5a09832bc6a81e7276941f # v3.28.18
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+      - name: Upload Semgrep SARIF artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: semgrep-results
+          path: semgrep.sarif
+          retention-days: 30
+
+      - name: Write Semgrep summary
+        if: always()
+        run: |
+          echo "## Semgrep SAST Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "Findings uploaded to the GitHub Security tab (category: semgrep)." >> "$GITHUB_STEP_SUMMARY"
+          echo "Full results available as a workflow artifact." >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # pip-audit — Software Composition Analysis (SCA) for Python dependencies.
+  # Intentional CVEs will be found; findings are reported, not blocking.
+  # Expected findings: CVE-2022-29217, CVE-2023-32681, CVE-2023-44271,
+  #                    CVE-2023-50447, CVE-2023-23931, CVE-2024-22195,
+  #                    CVE-2024-24762
+  # ---------------------------------------------------------------------------
+  pip-audit:
+    name: SCA — pip-audit
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    continue-on-error: true
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python from .python-version
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version-file: ".python-version"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@f0ec1fc3b38f5e7cd731bb6ce540c5af426746bb # v6.1.0
+
+      - name: Cache uv dependency store
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
+          restore-keys: uv-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Export requirements for pip-audit
+        run: uv export --no-hashes --format requirements-txt > requirements-audit.txt
+
+      - name: Run pip-audit (JSON + human output)
+        run: |
+          pip-audit \
+            -r requirements-audit.txt \
+            --output json \
+            --output-file pip-audit-results.json \
+            2>&1 | tee pip-audit-human.txt || true
+          # Also produce a markdown table for the summary
+          pip-audit \
+            -r requirements-audit.txt \
+            2>&1 | tee pip-audit-human.txt || true
+
+      - name: Upload pip-audit results artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pip-audit-results
+          path: |
+            pip-audit-results.json
+            pip-audit-human.txt
+          retention-days: 30
+
+      - name: Write pip-audit summary
+        run: |
+          echo "## SCA — pip-audit Dependency Vulnerability Report" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "> **Note:** CVEs below are intentional. Dependencies are pinned to" >> "$GITHUB_STEP_SUMMARY"
+          echo "> vulnerable versions for security tooling evaluation. Do NOT upgrade." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Package | Installed | CVE | Fix |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---------|-----------|-----|-----|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| pyjwt | 2.3.0 | CVE-2022-29217 | intentional — do not upgrade |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| requests | 2.27.1 | CVE-2023-32681 | intentional — do not upgrade |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Pillow | 9.3.0 | CVE-2023-44271, CVE-2023-50447 | intentional — do not upgrade |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| cryptography | 38.0.4 | CVE-2023-23931 | intentional — do not upgrade |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| jinja2 | 3.1.2 | CVE-2024-22195 | intentional — do not upgrade |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| python-multipart | 0.0.5 | CVE-2024-24762 | intentional — do not upgrade |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Full pip-audit output" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat pip-audit-human.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # hadolint — Dockerfile linter
+  # Expected findings: DL3007, DL4000, DL3008, DL3020, DL3025, DL3013
+  # These are all intentional Dockerfile misconfigurations.
+  # ---------------------------------------------------------------------------
+  hadolint:
+    name: Container — Hadolint (Dockerfile lint)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    continue-on-error: true
+
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Run Hadolint (SARIF output)
+        uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf # v3.1.0
+        with:
+          dockerfile: Dockerfile
+          format: sarif
+          output-file: hadolint-results.sarif
+          # Do NOT use no-fail — we want the exit code in the summary, but
+          # continue-on-error above prevents it from failing the job.
+          no-fail: true
+
+      - name: Upload Hadolint SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@ff0a06e83cb2de871e5a09832bc6a81e7276941f # v3.28.18
+        with:
+          sarif_file: hadolint-results.sarif
+          category: hadolint
+
+      - name: Run Hadolint (human-readable for summary)
+        run: |
+          docker run --rm -i \
+            ghcr.io/hadolint/hadolint:v2.12.0 \
+            hadolint - < Dockerfile \
+            2>&1 | tee hadolint-human.txt || true
+
+      - name: Upload Hadolint results artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: hadolint-results
+          path: |
+            hadolint-results.sarif
+            hadolint-human.txt
+          retention-days: 30
+
+      - name: Write Hadolint summary
+        run: |
+          echo "## Hadolint — Dockerfile Lint Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "> **Note:** The following Dockerfile violations are intentional for tooling evaluation:" >> "$GITHUB_STEP_SUMMARY"
+          echo "> DL3007 (floating tag), DL4000 (MAINTAINER), DL3008 (unpinned apt)," >> "$GITHUB_STEP_SUMMARY"
+          echo "> DL3020 (ADD vs COPY), DL3025 (shell-form CMD), DL3013 (uv sync without --frozen)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat hadolint-human.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # trivy — Container image scanner (OS packages + Python libs + secrets)
+  # Downloads the image artifact built by ci.yml's docker-build job.
+  # Runs independently so it doesn't need ci.yml to complete first.
+  # ---------------------------------------------------------------------------
+  trivy:
+    name: Container — Trivy image scan
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    continue-on-error: true
+
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5730b5a5a21c9895dab4f1d35de892048051a0c # v3.10.0
+
+      - name: Build Docker image for scanning
+        uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1 # v6.16.0
+        with:
+          context: .
+          push: false
+          load: true
+          tags: vulnshop:scan
+
+      - name: Run Trivy — vulnerability scan (SARIF)
+        uses: aquasecurity/trivy-action@76071ef0d7ec797419534a183b498b4d6366cf37 # v0.31.0
+        with:
+          image-ref: "vulnshop:scan"
+          format: sarif
+          output: trivy-vuln.sarif
+          severity: "CRITICAL,HIGH,MEDIUM"
+          exit-code: "0"  # never fail; report only
+
+      - name: Run Trivy — secret scan (table for summary)
+        uses: aquasecurity/trivy-action@76071ef0d7ec797419534a183b498b4d6366cf37 # v0.31.0
+        with:
+          image-ref: "vulnshop:scan"
+          format: table
+          output: trivy-secrets.txt
+          scanners: secret
+          exit-code: "0"
+
+      - name: Run Trivy — misconfig scan (table for summary)
+        uses: aquasecurity/trivy-action@76071ef0d7ec797419534a183b498b4d6366cf37 # v0.31.0
+        with:
+          image-ref: "vulnshop:scan"
+          format: table
+          output: trivy-misconfig.txt
+          scanners: misconfig
+          exit-code: "0"
+
+      - name: Upload Trivy vulnerability SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@ff0a06e83cb2de871e5a09832bc6a81e7276941f # v3.28.18
+        with:
+          sarif_file: trivy-vuln.sarif
+          category: trivy-image
+
+      - name: Upload Trivy results artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: trivy-results
+          path: |
+            trivy-vuln.sarif
+            trivy-secrets.txt
+            trivy-misconfig.txt
+          retention-days: 30
+
+      - name: Write Trivy summary
+        run: |
+          echo "## Trivy — Container Image Scan Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Detected Secrets in Image Layers" >> "$GITHUB_STEP_SUMMARY"
+          echo "> Expected: JWT_SECRET=secret123, ADMIN_PASSWORD=admin123, SECRET_KEY=supersecretkey123, api_key values in seeded DB" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat trivy-secrets.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Misconfigurations" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat trivy-misconfig.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Full vulnerability SARIF uploaded to the GitHub Security tab (category: trivy-image)." >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # checkov — IaC/Dockerfile misconfiguration scanner (Python-based)
+  # Expected findings:
+  #   CKV_DOCKER_2  — no HEALTHCHECK
+  #   CKV_DOCKER_3  — running as root (no USER instruction)
+  #   CKV2_DC_1     — no resource limits in compose
+  #   CKV2_DC_2     — privileged mode in compose
+  #   CKV_SECRET_*  — hardcoded ENV secrets (Dockerfile + docker-compose.yml)
+  # ---------------------------------------------------------------------------
+  checkov:
+    name: Container — Checkov (IaC misconfig)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    continue-on-error: true
+
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Run Checkov (SARIF output)
+        uses: bridgecrewio/checkov-action@b3b3fc6b08e4b5f9cc2f2d5b35b1c4c1b9e9edae # v12
+        with:
+          directory: .
+          framework: dockerfile,docker_compose,secrets
+          output_format: sarif
+          output_file_path: checkov-results.sarif
+          # soft_fail: do not exit non-zero so continue-on-error is enough
+          soft_fail: true
+
+      - name: Run Checkov (CLI table for human summary)
+        run: |
+          pip install checkov
+          checkov \
+            --directory . \
+            --framework dockerfile docker_compose secrets \
+            --compact \
+            --quiet \
+            2>&1 | tee checkov-human.txt || true
+
+      - name: Upload Checkov SARIF to GitHub Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@ff0a06e83cb2de871e5a09832bc6a81e7276941f # v3.28.18
+        with:
+          sarif_file: checkov-results.sarif
+          category: checkov
+
+      - name: Upload Checkov results artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: checkov-results
+          path: |
+            checkov-results.sarif
+            checkov-human.txt
+          retention-days: 30
+
+      - name: Write Checkov summary
+        if: always()
+        run: |
+          echo "## Checkov — IaC / Dockerfile Misconfiguration Scan" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "> **Expected failures (intentional misconfigs):**" >> "$GITHUB_STEP_SUMMARY"
+          echo "> CKV_DOCKER_2 (no HEALTHCHECK), CKV_DOCKER_3 (root user)," >> "$GITHUB_STEP_SUMMARY"
+          echo "> CKV2_DC_1 (no resource limits), CKV2_DC_2 (privileged mode)," >> "$GITHUB_STEP_SUMMARY"
+          echo "> CKV_SECRET_* (hardcoded secrets in ENV)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat checkov-human.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # gitleaks — Secret scanning across the full git history
+  # Will detect: SECRET_KEY, ADMIN_PASSWORD, JWT_SECRET, hardcoded api_key
+  # values, and the `secret123` JWT secret in security.py.
+  # Findings are reported but do NOT block — secrets are intentional.
+  # ---------------------------------------------------------------------------
+  gitleaks:
+    name: Secrets — Gitleaks
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    continue-on-error: true
+
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout repository (full history)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0  # full history scan
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GITLEAKS_LICENSE not required for public repos
+        with:
+          args: --exit-code=0  # never exit non-zero; continue-on-error handles it
+
+      - name: Upload Gitleaks results artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gitleaks-results
+          path: results.sarif
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Upload Gitleaks SARIF to GitHub Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@ff0a06e83cb2de871e5a09832bc6a81e7276941f # v3.28.18
+        with:
+          sarif_file: results.sarif
+          category: gitleaks
+        continue-on-error: true  # file may not exist if no findings
+
+      - name: Write Gitleaks summary
+        if: always()
+        run: |
+          echo "## Gitleaks — Secret Scanning Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "> **Expected secrets detected (intentional):**" >> "$GITHUB_STEP_SUMMARY"
+          echo "> - \`SECRET_KEY=secret123\` / \`supersecretkey123\` in Dockerfile, docker-compose.yml" >> "$GITHUB_STEP_SUMMARY"
+          echo "> - \`ADMIN_PASSWORD=admin123\` in Dockerfile, docker-compose.yml" >> "$GITHUB_STEP_SUMMARY"
+          echo "> - \`JWT_SECRET=secret123\` in Dockerfile, security.py, docker-compose.yml" >> "$GITHUB_STEP_SUMMARY"
+          echo "> - Hardcoded api_key values (\`sk-prod-HARDCODED...\`) in database.py" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "All findings are intentional and used for secret-scanning tooling evaluation." >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # syft — Generate a Software Bill of Materials (SBOM) in SPDX and CycloneDX
+  # formats. The SBOM is attached as a workflow artifact for downstream use
+  # (e.g., supply chain analysis, SLSA provenance).
+  # ---------------------------------------------------------------------------
+  syft:
+    name: SBOM — Syft
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    continue-on-error: true
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5730b5a5a21c9895dab4f1d35de892048051a0c # v3.10.0
+
+      - name: Build Docker image for SBOM generation
+        uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1 # v6.16.0
+        with:
+          context: .
+          push: false
+          load: true
+          tags: vulnshop:sbom
+
+      - name: Generate SBOM (SPDX + CycloneDX) with Syft
+        uses: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0 # v0.18.0
+        with:
+          image: vulnshop:sbom
+          artifact-name: sbom-vulnshop
+          format: spdx-json
+          output-file: sbom-spdx.json
+
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@f325610c9f50a54015d37c8d16cb3b0e2c8f4de0 # v0.18.0
+        with:
+          image: vulnshop:sbom
+          artifact-name: sbom-vulnshop-cyclonedx
+          format: cyclonedx-json
+          output-file: sbom-cyclonedx.json
+
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom-reports
+          path: |
+            sbom-spdx.json
+            sbom-cyclonedx.json
+          retention-days: 90  # keep SBOMs longer than scan results
+
+      - name: Write SBOM summary
+        run: |
+          echo "## SBOM — Software Bill of Materials" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Generated two SBOM formats for \`vulnshop:${{ github.sha }}\`:" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **SPDX JSON** — \`sbom-spdx.json\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **CycloneDX JSON** — \`sbom-cyclonedx.json\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f sbom-spdx.json ]; then
+            COMPONENT_COUNT=$(python3 -c "import json,sys; d=json.load(open('sbom-spdx.json')); print(len(d.get('packages', [])))" 2>/dev/null || echo "N/A")
+            echo "SPDX packages catalogued: **${COMPONENT_COUNT}**" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Download both files from the \`sbom-reports\` artifact." >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # security-summary — Consolidates all scan outcomes into one job summary.
+  # Runs after all other security jobs (pass or fail).
+  # ---------------------------------------------------------------------------
+  security-summary:
+    name: Security — Consolidated Summary
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    if: always()
+    needs:
+      - bandit
+      - semgrep
+      - pip-audit
+      - hadolint
+      - trivy
+      - checkov
+      - gitleaks
+      - syft
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Write consolidated security summary
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" << 'SUMMARY'
+          # Security Scan Consolidated Dashboard
+
+          > This application is **intentionally vulnerable** for security tooling evaluation.
+          > All findings below are expected. The pipeline surfaces them — it does not fix them.
+
+          ## Scan Job Outcomes
+
+          | Scanner | Category | Expected Findings |
+          |---------|----------|-------------------|
+          | Bandit | Python SAST | B301, B302, B307, B501, B502, B506, B602, B605, B701 |
+          | Semgrep | Python/FastAPI SAST | SQLi, XSS, SSRF, SSTI patterns |
+          | pip-audit | Dependency SCA | 6 intentional CVEs across 5 packages |
+          | Hadolint | Dockerfile lint | DL3007, DL4000, DL3008, DL3020, DL3025 |
+          | Trivy | Container image | OS CVEs + hardcoded secrets in layers |
+          | Checkov | IaC misconfig | CKV_DOCKER_2/3, CKV2_DC_1/2, CKV_SECRET_* |
+          | Gitleaks | Secret scanning | JWT secret, admin creds, API keys |
+          | Syft | SBOM generation | SPDX + CycloneDX artifacts |
+
+          ## Deliberate Vulnerability Coverage
+
+          | OWASP Top 10 | Vulnerability | Location |
+          |---|---|---|
+          | A01 | Path traversal, open redirect | utils.py |
+          | A02 | MD5 passwords, hardcoded JWT secret, plaintext PII | security.py, database.py |
+          | A03 | SQLi (login/search), stored+reflected XSS, command injection, SSTI, eval RCE | auth.py, products.py, utils.py |
+          | A05 | debug=True, wildcard CORS, stack traces in responses, env dump | main.py, utils.py |
+          | A06 | 6 CVE-laden dependency versions pinned intentionally | pyproject.toml |
+          | A07 | alg:none JWT acceptance, default admin/admin credentials | security.py, database.py |
+          | A08 | Pickle RCE, yaml.unsafe_load | utils.py |
+          | A09 | Plaintext passwords in audit log | auth.py |
+          | A10 | SSRF (fetch + fetch-ssl-insecure) | utils.py |
+
+          ## Artifacts
+
+          All scan result files are available as downloadable workflow artifacts:
+          - `bandit-results` — SARIF + high-severity text
+          - `semgrep-results` — SARIF
+          - `pip-audit-results` — JSON + human-readable
+          - `hadolint-results` — SARIF + human-readable
+          - `trivy-results` — SARIF + secret/misconfig tables
+          - `checkov-results` — SARIF + human-readable
+          - `gitleaks-results` — SARIF
+          - `sbom-reports` — SPDX JSON + CycloneDX JSON (retained 90 days)
+          SUMMARY

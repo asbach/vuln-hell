@@ -1,0 +1,271 @@
+###############################################################################
+# dast.yml — Dynamic Application Security Testing (DAST)
+#
+# Spins up the VulnShop app via Docker Compose, then runs OWASP ZAP against
+# the live instance. Findings are uploaded as SARIF to the Security tab and
+# as raw artifacts.
+#
+# Job graph:
+#
+#   dast-zap     — ZAP baseline + active scan rules against running app
+#   dast-summary — Summarises ZAP findings
+#
+# Triggers: PRs to main, weekly schedule (full active scan), manual dispatch.
+#
+# NOTE: ZAP will find real vulnerabilities in the running application because
+#       the app is intentionally insecure. continue-on-error is set on all
+#       scan steps so findings don't block PRs.
+###############################################################################
+
+name: DAST
+
+on:
+  pull_request:
+    branches:
+      - main
+  schedule:
+    # Full weekly DAST scan every Monday at 03:00 UTC
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      scan_type:
+        description: "ZAP scan type: baseline or full"
+        required: false
+        default: "baseline"
+        type: choice
+        options:
+          - baseline
+          - full
+
+concurrency:
+  group: dast-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # dast-zap — Start the application with Docker Compose, run OWASP ZAP.
+  # ---------------------------------------------------------------------------
+  dast-zap:
+    name: DAST — OWASP ZAP
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    continue-on-error: true
+
+    permissions:
+      contents: read
+      security-events: write
+      issues: write  # ZAP action can file issues with findings
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5730b5a5a21c9895dab4f1d35de892048051a0c # v3.10.0
+
+      - name: Build and start application via Docker Compose
+        run: |
+          docker compose up --build -d
+          echo "Waiting for VulnShop to become ready..."
+
+      - name: Wait for application health check
+        # The app has no HEALTHCHECK (intentional), so we poll the root endpoint.
+        run: |
+          MAX_RETRIES=30
+          RETRY_INTERVAL=3
+          for i in $(seq 1 $MAX_RETRIES); do
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/ 2>/dev/null || echo "000")
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "App is ready (HTTP $HTTP_STATUS) after $((i * RETRY_INTERVAL))s"
+              break
+            fi
+            echo "Attempt $i/$MAX_RETRIES — HTTP $HTTP_STATUS — retrying in ${RETRY_INTERVAL}s..."
+            sleep "$RETRY_INTERVAL"
+          done
+          # Final check; fail fast if app never came up.
+          curl --fail http://localhost:8000/ || (docker compose logs && exit 1)
+
+      - name: Verify key endpoints are reachable
+        run: |
+          # Smoke-test a few endpoints so ZAP has live targets
+          curl -s -o /dev/null -w "GET /           → %{http_code}\n" http://localhost:8000/
+          curl -s -o /dev/null -w "GET /products   → %{http_code}\n" http://localhost:8000/products
+          curl -s -o /dev/null -w "GET /login      → %{http_code}\n" http://localhost:8000/login
+          curl -s -o /dev/null -w "GET /api/utils/env → %{http_code}\n" http://localhost:8000/api/utils/env
+
+      - name: Run OWASP ZAP — Baseline scan
+        # Baseline scan: passive scan + a handful of active rules.
+        # Fast enough for PRs. The full active scan runs on schedule only.
+        if: ${{ github.event_name == 'pull_request' || inputs.scan_type == 'baseline' || inputs.scan_type == '' }}
+        uses: zaproxy/action-baseline@v0.12.0
+        continue-on-error: true
+        with:
+          target: "http://localhost:8000"
+          rules_file_name: ".github/zap-rules.tsv"
+          # cmd_options adds spider depth and ajax spider for thorough crawl
+          cmd_options: "-z '-config spider.maxDepth=5' -j"
+          # ZAP exits non-zero when it finds issues; that's expected here.
+          fail_action: false
+          artifact_name: zap-baseline-report
+
+      - name: Run OWASP ZAP — Full active scan
+        # Full active scan: runs every Monday via schedule or on manual dispatch.
+        # More aggressive but much slower — not suitable for every PR.
+        if: ${{ github.event_name == 'schedule' || inputs.scan_type == 'full' }}
+        uses: zaproxy/action-full-scan@v0.11.0
+        continue-on-error: true
+        with:
+          target: "http://localhost:8000"
+          rules_file_name: ".github/zap-rules.tsv"
+          cmd_options: "-z '-config spider.maxDepth=10' -j"
+          fail_action: false
+          artifact_name: zap-full-report
+
+      - name: Convert ZAP JSON report to SARIF
+        if: always()
+        run: |
+          # ZAP produces report_json.json; convert to SARIF for the Security tab.
+          # Use Python to do the conversion since the app already requires Python.
+          python3 - << 'PYEOF'
+          import json, os, sys
+
+          report_path = "report_json.json"
+          if not os.path.exists(report_path):
+              print("No ZAP JSON report found — skipping SARIF conversion.")
+              # Write a minimal valid SARIF so the upload step doesn't error.
+              sarif = {
+                  "version": "2.1.0",
+                  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+                  "runs": [{"tool": {"driver": {"name": "OWASP ZAP", "rules": []}}, "results": []}]
+              }
+              with open("zap.sarif", "w") as f:
+                  json.dump(sarif, f, indent=2)
+              sys.exit(0)
+
+          with open(report_path) as f:
+              zap_report = json.load(f)
+
+          rules = []
+          results = []
+
+          for site in zap_report.get("site", []):
+              for alert in site.get("alerts", []):
+                  rule_id = alert.get("pluginid", "unknown")
+                  rule = {
+                      "id": str(rule_id),
+                      "name": alert.get("alert", "Unknown"),
+                      "shortDescription": {"text": alert.get("alert", "Unknown")},
+                      "fullDescription": {"text": alert.get("desc", "")},
+                      "helpUri": alert.get("reference", ""),
+                      "properties": {
+                          "tags": ["security"],
+                          "problem.severity": alert.get("riskdesc", "").split(" ")[0],
+                      },
+                  }
+                  rules.append(rule)
+
+                  risk = alert.get("riskcode", "0")
+                  severity_map = {"3": "error", "2": "warning", "1": "note", "0": "none"}
+                  level = severity_map.get(str(risk), "warning")
+
+                  for instance in alert.get("instances", [{}]):
+                      uri = instance.get("uri", site.get("@name", "http://localhost:8000"))
+                      result = {
+                          "ruleId": str(rule_id),
+                          "level": level,
+                          "message": {
+                              "text": f"{alert.get('alert', '')}: {instance.get('evidence', alert.get('solution', ''))}"
+                          },
+                          "locations": [{
+                              "physicalLocation": {
+                                  "artifactLocation": {"uri": uri},
+                                  "region": {"startLine": 1}
+                              }
+                          }]
+                      }
+                      results.append(result)
+
+          sarif = {
+              "version": "2.1.0",
+              "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+              "runs": [{
+                  "tool": {
+                      "driver": {
+                          "name": "OWASP ZAP",
+                          "version": "2.14",
+                          "informationUri": "https://www.zaproxy.org/",
+                          "rules": rules
+                      }
+                  },
+                  "results": results
+              }]
+          }
+
+          with open("zap.sarif", "w") as f:
+              json.dump(sarif, f, indent=2)
+
+          print(f"Converted {len(results)} ZAP findings to SARIF.")
+          PYEOF
+
+      - name: Upload ZAP SARIF to GitHub Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@ff0a06e83cb2de871e5a09832bc6a81e7276941f # v3.28.18
+        with:
+          sarif_file: zap.sarif
+          category: zap-dast
+        continue-on-error: true  # may fail if no alerts found
+
+      - name: Upload ZAP results artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: zap-results
+          path: |
+            report_json.json
+            report_html.html
+            report_md.md
+            zap.sarif
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Dump Docker Compose logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Stop Docker Compose
+        if: always()
+        run: docker compose down --volumes --remove-orphans
+
+      - name: Write ZAP summary
+        if: always()
+        run: |
+          echo "## DAST — OWASP ZAP Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          SCAN_TYPE="${{ inputs.scan_type }}"
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "$SCAN_TYPE" = "full" ]; then
+            echo "**Scan type:** Full active scan" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "**Scan type:** Baseline (passive + limited active)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Target:** http://localhost:8000 (VulnShop via Docker Compose)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "> **Expected DAST findings (intentional vulnerabilities):**" >> "$GITHUB_STEP_SUMMARY"
+          echo "> - SQL Injection (login, search endpoints)" >> "$GITHUB_STEP_SUMMARY"
+          echo "> - Reflected/Stored XSS (products, search)" >> "$GITHUB_STEP_SUMMARY"
+          echo "> - Command Injection (/api/utils/ping)" >> "$GITHUB_STEP_SUMMARY"
+          echo "> - SSRF (/api/utils/fetch)" >> "$GITHUB_STEP_SUMMARY"
+          echo "> - Path Traversal (/api/utils/file)" >> "$GITHUB_STEP_SUMMARY"
+          echo "> - Open Redirect (/api/utils/redirect)" >> "$GITHUB_STEP_SUMMARY"
+          echo "> - Environment dump (/api/utils/env)" >> "$GITHUB_STEP_SUMMARY"
+          echo "> - Wildcard CORS, debug=True, missing security headers" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f report_md.md ]; then
+            echo "### ZAP Markdown Report" >> "$GITHUB_STEP_SUMMARY"
+            cat report_md.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ZAP markdown report not available. See \`zap-results\` artifact." >> "$GITHUB_STEP_SUMMARY"
+          fi
