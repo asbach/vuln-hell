@@ -60,22 +60,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      - name: Set up Python from .python-version
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version-file: ".python-version"
+        uses: actions/checkout@v6
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@f0ec1fc3b38f5e7cd731bb6ce540c5af426746bb # v6.1.0
-
-      - name: Cache uv dependency store
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
-        with:
-          path: ~/.cache/uv
-          key: uv-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
-          restore-keys: uv-${{ runner.os }}-
+        uses: astral-sh/setup-uv@v6
 
       - name: Install dependencies (includes bandit[toml])
         run: uv sync --extra dev
@@ -102,13 +90,13 @@ jobs:
             2>&1 | tee -a bandit-high.txt
 
       - name: Upload Bandit SARIF to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@ff0a06e83cb2de871e5a09832bc6a81e7276941f # v3.28.18
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: bandit-results.sarif
           category: bandit
 
       - name: Upload Bandit results artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@v4
         with:
           name: bandit-results
           path: |
@@ -144,10 +132,9 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
+        uses: actions/checkout@v4
       - name: Run Semgrep (SARIF output)
-        uses: returntocorp/semgrep-action@fcd5ab7459e8d91cb1777481980d1b18b4fc6735 # v1
+        uses: returntocorp/semgrep-action@v1
         with:
           config: .github/semgrep.yml
           generateSarif: "1"
@@ -156,14 +143,14 @@ jobs:
 
       - name: Upload Semgrep SARIF to GitHub Security tab
         if: always()
-        uses: github/codeql-action/upload-sarif@ff0a06e83cb2de871e5a09832bc6a81e7276941f # v3.28.18
+        uses: github/codeql-action/upload-sarif@v3 # v3.28.18
         with:
           sarif_file: semgrep.sarif
           category: semgrep
 
       - name: Upload Semgrep SARIF artifact
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@v4 # v4.6.2
         with:
           name: semgrep-results
           path: semgrep.sarif
@@ -194,22 +181,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      - name: Set up Python from .python-version
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version-file: ".python-version"
+        uses: actions/checkout@v6 # v4.2.2
 
       - name: Set up uv
         uses: astral-sh/setup-uv@f0ec1fc3b38f5e7cd731bb6ce540c5af426746bb # v6.1.0
-
-      - name: Cache uv dependency store
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
-        with:
-          path: ~/.cache/uv
-          key: uv-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
-          restore-keys: uv-${{ runner.os }}-
 
       - name: Install dependencies
         run: uv sync --extra dev
@@ -233,7 +208,7 @@ jobs:
             2>&1 | tee pip-audit-human.txt || true
 
       - name: Upload pip-audit results artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@v4
         with:
           name: pip-audit-results
           path: |
@@ -279,10 +254,9 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
+        uses: actions/checkout@v4
       - name: Run Hadolint (SARIF output)
-        uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf # v3.1.0
+        uses: hadolint/hadolint-action@v3
         with:
           dockerfile: Dockerfile
           format: sarif
@@ -292,7 +266,7 @@ jobs:
           no-fail: true
 
       - name: Upload Hadolint SARIF to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@ff0a06e83cb2de871e5a09832bc6a81e7276941f # v3.28.18
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: hadolint-results.sarif
           category: hadolint
@@ -305,9 +279,8 @@ jobs:
             2>&1 | tee hadolint-human.txt || true
 
       - name: Upload Hadolint results artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@v4
         with:
-          name: hadolint-results
           path: |
             hadolint-results.sarif
             hadolint-human.txt
@@ -342,13 +315,13 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@b5730b5a5a21c9895dab4f1d35de892048051a0c # v3.10.0
+        uses: docker/setup-buildx-action@v3 # v3.10.0
 
       - name: Build Docker image for scanning
-        uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1 # v6.16.0
+        uses: docker/build-push-action@v6 # v6.16.0
         with:
           context: .
           push: false
@@ -356,7 +329,7 @@ jobs:
           tags: vulnshop:scan
 
       - name: Run Trivy — vulnerability scan (SARIF)
-        uses: aquasecurity/trivy-action@76071ef0d7ec797419534a183b498b4d6366cf37 # v0.31.0
+        uses: aquasecurity/trivy-action@v0.31.0# v0.31.0
         with:
           image-ref: "vulnshop:scan"
           format: sarif
@@ -365,7 +338,7 @@ jobs:
           exit-code: "0"  # never fail; report only
 
       - name: Run Trivy — secret scan (table for summary)
-        uses: aquasecurity/trivy-action@76071ef0d7ec797419534a183b498b4d6366cf37 # v0.31.0
+        uses: aquasecurity/trivy-action@v0.31.0 # v0.31.0
         with:
           image-ref: "vulnshop:scan"
           format: table
@@ -374,7 +347,7 @@ jobs:
           exit-code: "0"
 
       - name: Run Trivy — misconfig scan (table for summary)
-        uses: aquasecurity/trivy-action@76071ef0d7ec797419534a183b498b4d6366cf37 # v0.31.0
+        uses: aquasecurity/trivy-action@v0.31.0 # v0.31.0
         with:
           image-ref: "vulnshop:scan"
           format: table
@@ -383,13 +356,13 @@ jobs:
           exit-code: "0"
 
       - name: Upload Trivy vulnerability SARIF to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@ff0a06e83cb2de871e5a09832bc6a81e7276941f # v3.28.18
+        uses: github/codeql-action/upload-sarif@v3.28.18# v3.28.18
         with:
           sarif_file: trivy-vuln.sarif
           category: trivy-image
 
       - name: Upload Trivy results artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@v4
         with:
           name: trivy-results
           path: |
@@ -436,10 +409,8 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      - name: Run Checkov (SARIF output)
-        uses: bridgecrewio/checkov-action@b3b3fc6b08e4b5f9cc2f2d5b35b1c4c1b9e9edae # v12
+        uses: actions/checkout@v6
+        uses: bridgecrewio/checkov-action@v12
         with:
           directory: .
           framework: dockerfile,docker_compose,secrets
@@ -460,14 +431,14 @@ jobs:
 
       - name: Upload Checkov SARIF to GitHub Security tab
         if: always()
-        uses: github/codeql-action/upload-sarif@ff0a06e83cb2de871e5a09832bc6a81e7276941f # v3.28.18
+        uses: github/codeql-action/upload-sarif@v3.28.18
         with:
           sarif_file: checkov-results.sarif
           category: checkov
 
       - name: Upload Checkov results artifact
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@v4 # v4.6.2
         with:
           name: checkov-results
           path: |
