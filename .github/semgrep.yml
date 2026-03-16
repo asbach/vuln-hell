@@ -1,0 +1,177 @@
+###############################################################################
+# .github/semgrep.yml — Semgrep ruleset configuration for VulnShop
+#
+# This configuration layers multiple rulesets to maximize coverage across
+# the vulnerability classes present in this intentionally insecure FastAPI app.
+#
+# Rule sources:
+#   - p/python               — general Python security rules
+#   - p/flask                — overlaps with FastAPI patterns (Jinja2, request handling)
+#   - p/owasp-top-ten        — OWASP Top 10 mapped rules
+#   - p/jwt                  — JWT-specific misuse patterns (alg:none, weak secrets)
+#   - p/secrets              — hardcoded credentials and API keys
+#   - p/sql-injection        — SQL injection patterns (raw string queries)
+#   - p/command-injection    — shell injection (os.popen, subprocess shell=True)
+#   - p/xss                  — cross-site scripting patterns
+#   - p/ssrf                 — server-side request forgery
+#   - local rules below      — app-specific patterns not covered by community rules
+#
+# Expected findings (all intentional):
+#   - Hardcoded JWT secret `secret123` in security.py
+#   - MD5 usage (hashlib.md5) in security.py and database.py
+#   - Raw SQL string concatenation in auth.py, products.py, users.py
+#   - eval() call in utils.py
+#   - pickle.loads() in utils.py
+#   - yaml.load(Loader=yaml.Loader) in utils.py
+#   - requests.get(verify=False) in utils.py
+#   - os.popen() in utils.py
+#   - subprocess.Popen(shell=True) in utils.py
+#   - Jinja2 Template() without autoescape in utils.py
+#   - JWT decode accepting "none" algorithm in security.py
+###############################################################################
+
+rules:
+  # Pull in community rulesets
+  - p/python
+  - p/owasp-top-ten
+  - p/jwt
+  - p/secrets
+  - p/sql-injection
+  - p/command-injection
+  - p/xss
+  - p/ssrf
+
+  # ---------------------------------------------------------------------------
+  # Custom rules specific to this application's vulnerability patterns
+  # ---------------------------------------------------------------------------
+
+  - id: fastapi-jwt-none-algorithm
+    patterns:
+      - pattern: jwt.decode($TOKEN, $SECRET, algorithms=[..., "none", ...])
+    message: >
+      JWT decode accepts the "none" algorithm, allowing signature bypass.
+      This is intentional (CVE-2022-29217 evaluation). Finding confirms
+      detection of CWE-347 (Improper Verification of Cryptographic Signature).
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-347"
+      owasp: "A07:2021"
+      references:
+        - https://nvd.nist.gov/vuln/detail/CVE-2022-29217
+
+  - id: fastapi-hardcoded-jwt-secret
+    patterns:
+      - pattern: SECRET_KEY = "..."
+      - pattern-not: SECRET_KEY = $ENV_VAR
+    message: >
+      Hardcoded JWT secret key detected. An attacker can forge arbitrary JWT
+      tokens. This is intentional (A02/A07 evaluation).
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-798"
+      owasp: "A02:2021"
+
+  - id: fastapi-eval-user-input
+    patterns:
+      - pattern: eval($USER_INPUT)
+    message: >
+      eval() called on user-controlled input. Allows arbitrary Python code
+      execution (RCE). This is intentional (A03/B307 evaluation).
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-94"
+      owasp: "A03:2021"
+
+  - id: fastapi-pickle-loads
+    patterns:
+      - pattern: pickle.loads(...)
+    message: >
+      Unsafe deserialization via pickle.loads(). Allows RCE via crafted payload.
+      This is intentional (A08/B301 evaluation).
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-502"
+      owasp: "A08:2021"
+
+  - id: fastapi-yaml-unsafe-load
+    patterns:
+      - pattern: yaml.load($CONTENT, Loader=yaml.Loader)
+    message: >
+      yaml.load() with unsafe Loader allows arbitrary object construction (RCE).
+      Use yaml.safe_load() instead. This is intentional (B506 evaluation).
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-502"
+      owasp: "A08:2021"
+
+  - id: fastapi-os-popen-injection
+    patterns:
+      - pattern: os.popen(f"... {$USER_INPUT} ...")
+    message: >
+      os.popen() with f-string interpolation of user input allows command injection.
+      This is intentional (A03/B605 evaluation).
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-78"
+      owasp: "A03:2021"
+
+  - id: fastapi-jinja2-ssti
+    patterns:
+      - pattern: |
+          from jinja2 import Template
+          ...
+          Template($USER_INPUT)
+    message: >
+      Jinja2 Template() instantiated with user input enables Server-Side
+      Template Injection (SSTI). This is intentional (A03/B701 evaluation).
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-94"
+      owasp: "A03:2021"
+
+  - id: fastapi-md5-password-hashing
+    patterns:
+      - pattern: hashlib.md5($PASSWORD.encode()).hexdigest()
+    message: >
+      MD5 used for password hashing. MD5 is cryptographically broken and
+      unsuitable for passwords. This is intentional (A02/B302/B324 evaluation).
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-916"
+      owasp: "A02:2021"
+
+  - id: fastapi-requests-ssl-verify-false
+    patterns:
+      - pattern: requests.get($URL, verify=False, ...)
+    message: >
+      SSL certificate verification disabled. Enables MITM attacks.
+      This is intentional (B501 evaluation).
+    languages: [python]
+    severity: WARNING
+    metadata:
+      cwe: "CWE-295"
+      owasp: "A02:2021"
+
+  - id: fastapi-env-dump-endpoint
+    patterns:
+      - pattern: |
+          @$ROUTER.get(...)
+          async def $FUNC():
+              return dict(os.environ)
+    message: >
+      FastAPI endpoint dumps the full OS environment to any caller.
+      Exposes secrets, database URLs, and configuration. This is intentional
+      (A05 evaluation).
+    languages: [python]
+    severity: ERROR
+    metadata:
+      cwe: "CWE-200"
+      owasp: "A05:2021"
