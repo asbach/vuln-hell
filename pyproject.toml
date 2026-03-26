@@ -11,12 +11,12 @@ dependencies = [
     # A06: Intentionally pinned to vulnerable versions for SCA tooling evaluation
     "fastapi==0.95.2",
     "uvicorn==0.20.0",
-    "jinja2==3.1.2",            # CVE-2024-22195 — XSS via ngettext pluralisation
-    "python-multipart==0.0.5",  # CVE-2024-24762 — ReDoS / DoS on crafted form data
-    "pyjwt==2.3.0",             # CVE-2022-29217 — alg:none / algorithm confusion
-    "requests==2.27.1",         # CVE-2023-32681 — Proxy-Authorization header leak
+    "jinja2==3.1.6",            # CVE-2024-22195 — XSS via ngettext pluralisation
+    "python-multipart==0.0.20",  # CVE-2024-24762 — ReDoS / DoS on crafted form data
+    "pyjwt==2.12.0",             # CVE-2022-29217 — alg:none / algorithm confusion
+    "requests==2.32.5",         # CVE-2023-32681 — Proxy-Authorization header leak
     "Pillow==9.3.0",            # CVE-2023-44271 / CVE-2023-50447 — uncontrolled resource consumption
-    "cryptography==38.0.4",     # CVE-2023-23931 — allows RSA signature bypass
+    "cryptography==46.0.5",     # CVE-2023-23931 — allows RSA signature bypass
     "itsdangerous==2.0.1",
     "passlib==1.7.4",
     "aiofiles==0.7.0",
