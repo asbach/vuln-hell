@@ -17,7 +17,7 @@ dependencies = [
     "requests==2.27.1",         # CVE-2023-32681 — Proxy-Authorization header leak
     "Pillow==9.3.0",            # CVE-2023-44271 / CVE-2023-50447 — uncontrolled resource consumption
     "cryptography==38.0.4",     # CVE-2023-23931 — allows RSA signature bypass
-    "itsdangerous==2.0.1",
+    "itsdangerous==2.2.0",
     "passlib==1.7.4",
     "aiofiles==0.7.0",
     "python-dotenv==0.19.0",
