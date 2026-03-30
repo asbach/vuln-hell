@@ -20,7 +20,7 @@ dependencies = [
     "itsdangerous==2.0.1",
     "passlib==1.7.4",
     "aiofiles==0.7.0",
-    "python-dotenv==0.19.0",
+    "python-dotenv==1.2.1",
     "pyyaml>=5.1",              # B506 — yaml.load without safe Loader
 ]
 
